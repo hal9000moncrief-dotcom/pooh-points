@@ -3,6 +3,8 @@ import time
 import random
 import re
 import requests
+import os
+import html
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 from bs4 import BeautifulSoup
@@ -13,7 +15,7 @@ from openpyxl.styles import Font, Alignment
 BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball"
 SEC_TEAMS_HTML = "https://www.espn.com/mens-college-basketball/teams/_/group/23"
 
-DRAFT_XLSX = "ByCoach.xlsx"   # must be in same folder
+DRAFT_XLSX = os.path.join(os.path.dirname(__file__), "ByCoach.xlsx")   # must be in same folder
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0 Safari/537.36",
@@ -360,6 +362,45 @@ def write_xlsx(players_rows: List[dict], owner_totals_rows: List[dict], out_path
 
     wb.save(out_path)
 
+def write_html_tables(players_rows, owner_totals_rows, out_players_html, out_owners_html, date_str):
+    def esc(x):
+        return html.escape("" if x is None else str(x))
+
+    players_cols = ["owner","started_today","player","team","game","status","pooh","pts","reb","ast","stl","blk","to","min"]
+
+    # Players page
+    with open(out_players_html, "w", encoding="utf-8") as f:
+        f.write("<!doctype html><html><head><meta charset='utf-8'>")
+        f.write(f"<title>SEC Pooh Points — {esc(date_str)}</title>")
+        f.write("<style>body{font-family:Arial}table{border-collapse:collapse;font-size:14px}"
+                "th,td{border:1px solid #ccc;padding:4px 6px}th{background:#eee}"
+                ".start{font-weight:bold}</style>")
+        f.write("</head><body>")
+        f.write(f"<h2>SEC Pooh Points — {esc(date_str)}</h2>")
+        f.write("<table><thead><tr>")
+        for c in players_cols:
+            f.write(f"<th>{esc(c)}</th>")
+        f.write("</tr></thead><tbody>")
+        for r in players_rows:
+            cls = " class='start'" if r.get("started_today") == "Yes" else ""
+            f.write("<tr>")
+            for c in players_cols:
+                f.write(f"<td{cls}>{esc(r.get(c,''))}</td>")
+            f.write("</tr>")
+        f.write("</tbody></table></body></html>")
+
+    # Owners page
+    with open(out_owners_html, "w", encoding="utf-8") as f:
+        f.write("<!doctype html><html><head><meta charset='utf-8'>")
+        f.write(f"<title>Owner Starters Total — {esc(date_str)}</title>")
+        f.write("<style>body{font-family:Arial}table{border-collapse:collapse;font-size:14px}"
+                "th,td{border:1px solid #ccc;padding:4px 6px}th{background:#eee}</style>")
+        f.write("</head><body>")
+        f.write(f"<h2>Owner Starters Total — {esc(date_str)}</h2>")
+        f.write("<table><thead><tr><th>Owner</th><th>Starter Pooh Total</th><th>Starters Count So Far</th></tr></thead><tbody>")
+        for r in owner_totals_rows:
+            f.write(f"<tr><td>{esc(r['owner'])}</td><td>{esc(r['starter_pooh_total'])}</td><td>{esc(r['starters_count_so_far'])}</td></tr>")
+        f.write("</tbody></table></body></html>")
 
 # ----------------------------
 # MAIN
@@ -377,7 +418,13 @@ def main():
     sec_events = [e for e in events if is_sec_involved(e, sec_ids)]
 
     yyyy_mm_dd = f"{date_yyyymmdd[:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:]}"
-    out_xlsx = f"Today_PoohPoints_SEC_ByOwner_{yyyy_mm_dd}.xlsx"
+    OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "site")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+out_xlsx = os.path.join(OUTPUT_DIR, f"Today_PoohPoints_SEC_ByOwner_{yyyy_mm_dd}.xlsx")
+out_players_html = os.path.join(OUTPUT_DIR, "today_players.html")
+out_owners_html  = os.path.join(OUTPUT_DIR, "today_owners.html")
+
 
     print(f"Found {len(sec_events)} SEC-involved games for {yyyy_mm_dd}\n")
 
@@ -456,8 +503,12 @@ def main():
     owner_totals_rows.sort(key=lambda x: x["starter_pooh_total"], reverse=True)
 
     write_xlsx(all_rows, owner_totals_rows, out_xlsx)
-    print(f"Wrote: {out_xlsx}")
+    write_html_tables(all_rows, owner_totals_rows, out_players_html, out_owners_html, yyyy_mm_dd)
+print(f"Wrote: {out_players_html}")
+print(f"Wrote: {out_owners_html}")
+print(f"Wrote: {out_xlsx}")
 
 
 if __name__ == "__main__":
     main()
+
