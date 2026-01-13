@@ -401,7 +401,6 @@ def write_html_tables(players_rows, owner_totals_rows, out_players_html, out_own
         for r in owner_totals_rows:
             f.write(f"<tr><td>{esc(r['owner'])}</td><td>{esc(r['starter_pooh_total'])}</td><td>{esc(r['starters_count_so_far'])}</td></tr>")
         f.write("</tbody></table></body></html>")
-
 # ----------------------------
 # MAIN
 # ----------------------------
@@ -418,12 +417,12 @@ def main():
     sec_events = [e for e in events if is_sec_involved(e, sec_ids)]
 
     yyyy_mm_dd = f"{date_yyyymmdd[:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:]}"
-    OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "site")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_dir = os.path.join(os.path.dirname(__file__), "..", "site")
+    os.makedirs(output_dir, exist_ok=True)
 
-    out_xlsx = os.path.join(OUTPUT_DIR, f"Today_PoohPoints_SEC_ByOwner_{yyyy_mm_dd}.xlsx")
-    out_players_html = os.path.join(OUTPUT_DIR, "today_players.html")
-    out_owners_html  = os.path.join(OUTPUT_DIR, "today_owners.html")
+    out_xlsx = os.path.join(output_dir, f"Today_PoohPoints_SEC_ByOwner_{yyyy_mm_dd}.xlsx")
+    out_players_html = os.path.join(output_dir, "today_players.html")
+    out_owners_html  = os.path.join(output_dir, "today_owners.html")
 
     print(f"Found {len(sec_events)} SEC-involved games for {yyyy_mm_dd}\n")
 
@@ -473,7 +472,6 @@ def main():
 
         print(f"  Players captured: {len(players)}\n")
 
-    # Players sheet sort: Owner (draft order), then starters first, then Pooh desc
     owner_rank = {o: i for i, o in enumerate(owner_order)}
 
     def sort_key(r):
@@ -484,7 +482,6 @@ def main():
 
     all_rows.sort(key=sort_key)
 
-    # OwnerTotals: EXCLUDE Undrafted
     totals: Dict[str, Dict[str, int]] = {}
     for r in all_rows:
         owner = r["owner"]
@@ -503,6 +500,7 @@ def main():
 
     write_xlsx(all_rows, owner_totals_rows, out_xlsx)
     write_html_tables(all_rows, owner_totals_rows, out_players_html, out_owners_html, yyyy_mm_dd)
+
     print(f"Wrote: {out_players_html}")
     print(f"Wrote: {out_owners_html}")
     print(f"Wrote: {out_xlsx}")
