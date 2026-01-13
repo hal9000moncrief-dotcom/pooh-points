@@ -5,7 +5,7 @@ import re
 import requests
 import os
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook, Workbook
@@ -158,6 +158,18 @@ def compute_pooh(values: List[str], labels: List[str]) -> Optional[dict]:
         "POOH": pooh,
     }
 
+def parse_yyyymmdd(s: str) -> datetime:
+    s = (s or "").strip()
+    if not re.fullmatch(r"\d{8}", s):
+        raise ValueError("Date must be YYYYMMDD (8 digits).")
+    return datetime.strptime(s, "%Y%m%d")
+
+def fmt_yyyymmdd(dt: datetime) -> str:
+    return dt.strftime("%Y%m%d")
+
+def fmt_yyyy_mm_dd(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d")
+
 
 # ----------------------------
 # DRAFT BOARD
@@ -210,8 +222,8 @@ def load_draft_board(xlsx_path: str) -> Tuple[Dict[str, dict], List[str]]:
 # SEC + SCOREBOARD
 # ----------------------------
 def get_sec_team_ids() -> set:
-    html = get_text(SEC_TEAMS_HTML)
-    soup = BeautifulSoup(html, "lxml")
+    html_txt = get_text(SEC_TEAMS_HTML)
+    soup = BeautifulSoup(html_txt, "lxml")
     team_ids = set()
     for a in soup.select('a[href*="/mens-college-basketball/team/_/id/"]'):
         href = a.get("href", "")
@@ -362,21 +374,21 @@ def write_xlsx(players_rows: List[dict], owner_totals_rows: List[dict], out_path
 
     wb.save(out_path)
 
-def write_html_tables(players_rows, owner_totals_rows, out_players_html, out_owners_html, date_str):
+def write_html_tables(players_rows, owner_totals_rows, out_players_html, out_owners_html, title_str):
     def esc(x):
         return html.escape("" if x is None else str(x))
 
-    players_cols = ["owner","started_today","player","team","game","status","pooh","pts","reb","ast","stl","blk","to","min"]
+    players_cols = ["date","owner","started_today","player","team","game","status","pooh","pts","reb","ast","stl","blk","to","min"]
 
     # Players page
     with open(out_players_html, "w", encoding="utf-8") as f:
         f.write("<!doctype html><html><head><meta charset='utf-8'>")
-        f.write(f"<title>SEC Pooh Points — {esc(date_str)}</title>")
+        f.write(f"<title>SEC Pooh Points — {esc(title_str)}</title>")
         f.write("<style>body{font-family:Arial}table{border-collapse:collapse;font-size:14px}"
                 "th,td{border:1px solid #ccc;padding:4px 6px}th{background:#eee}"
                 ".start{font-weight:bold}</style>")
         f.write("</head><body>")
-        f.write(f"<h2>SEC Pooh Points — {esc(date_str)}</h2>")
+        f.write(f"<h2>SEC Pooh Points — {esc(title_str)}</h2>")
         f.write("<table><thead><tr>")
         for c in players_cols:
             f.write(f"<th>{esc(c)}</th>")
@@ -392,96 +404,131 @@ def write_html_tables(players_rows, owner_totals_rows, out_players_html, out_own
     # Owners page
     with open(out_owners_html, "w", encoding="utf-8") as f:
         f.write("<!doctype html><html><head><meta charset='utf-8'>")
-        f.write(f"<title>Owner Starters Total — {esc(date_str)}</title>")
+        f.write(f"<title>Owner Starters Total — {esc(title_str)}</title>")
         f.write("<style>body{font-family:Arial}table{border-collapse:collapse;font-size:14px}"
                 "th,td{border:1px solid #ccc;padding:4px 6px}th{background:#eee}</style>")
         f.write("</head><body>")
-        f.write(f"<h2>Owner Starters Total — {esc(date_str)}</h2>")
+        f.write(f"<h2>Owner Starters Total — {esc(title_str)}</h2>")
         f.write("<table><thead><tr><th>Owner</th><th>Starter Pooh Total</th><th>Starters Count So Far</th></tr></thead><tbody>")
         for r in owner_totals_rows:
             f.write(f"<tr><td>{esc(r['owner'])}</td><td>{esc(r['starter_pooh_total'])}</td><td>{esc(r['starters_count_so_far'])}</td></tr>")
         f.write("</tbody></table></body></html>")
+
+
 # ----------------------------
 # MAIN
 # ----------------------------
 def main():
-    if len(sys.argv) >= 2:
-        date_yyyymmdd = sys.argv[1].strip()
+    # Primary date: from arg or today. Always also include previous day.
+    if len(sys.argv) >= 2 and sys.argv[1].strip():
+        primary_dt = parse_yyyymmdd(sys.argv[1].strip())
     else:
-        date_yyyymmdd = datetime.now().strftime("%Y%m%d")
+        primary_dt = datetime.now()
+
+    prev_dt = primary_dt - timedelta(days=1)
+
+    primary_yyyymmdd = fmt_yyyymmdd(primary_dt)
+    prev_yyyymmdd = fmt_yyyymmdd(prev_dt)
+
+    primary_label = fmt_yyyy_mm_dd(primary_dt)
+    prev_label = fmt_yyyy_mm_dd(prev_dt)
+
+    # Title string for pages: show range
+    title_str = f"{prev_label} + {primary_label}"
 
     draft_map, owner_order = load_draft_board(DRAFT_XLSX)
-
     sec_ids = get_sec_team_ids()
-    events = get_today_events(date_yyyymmdd)
-    sec_events = [e for e in events if is_sec_involved(e, sec_ids)]
 
-    yyyy_mm_dd = f"{date_yyyymmdd[:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:]}"
+    # Fetch events for both dates
+    events_primary = get_today_events(primary_yyyymmdd)
+    events_prev = get_today_events(prev_yyyymmdd)
+
+    sec_events_primary = [e for e in events_primary if is_sec_involved(e, sec_ids)]
+    sec_events_prev = [e for e in events_prev if is_sec_involved(e, sec_ids)]
+
+    total_sec_events = len(sec_events_primary) + len(sec_events_prev)
+
     output_dir = os.path.join(os.path.dirname(__file__), "..", "docs")
     os.makedirs(output_dir, exist_ok=True)
 
-    out_xlsx = os.path.join(output_dir, f"Today_PoohPoints_SEC_ByOwner_{yyyy_mm_dd}.xlsx")
+    # Keep filenames based on PRIMARY date (to avoid breaking anything else)
+    out_xlsx = os.path.join(output_dir, f"Today_PoohPoints_SEC_ByOwner_{primary_label}.xlsx")
     out_players_html = os.path.join(output_dir, "today_players.html")
     out_owners_html  = os.path.join(output_dir, "today_owners.html")
 
-    print(f"Found {len(sec_events)} SEC-involved games for {yyyy_mm_dd}\n")
+    print(f"Found {total_sec_events} SEC-involved games for {title_str}\n")
 
-    all_rows = []
-    for e in sec_events:
-        event_id = str(e.get("id") or "")
-        hdr = extract_event_header(e)
-        home = hdr["home"]
-        away = hdr["away"]
-        status_line = hdr["status"]
+    all_rows: List[dict] = []
 
-        game_label = f"{away.get('abbr','')}@{home.get('abbr','')}"
-        print(f"{game_label} — {status_line} — (event {event_id})")
+    def process_day(day_label: str, sec_events: List[dict]):
+        nonlocal all_rows
+        for e in sec_events:
+            event_id = str(e.get("id") or "")
+            hdr = extract_event_header(e)
+            home = hdr["home"]
+            away = hdr["away"]
+            status_line = hdr["status"]
 
-        players = get_boxscore_players(event_id)
-        if not players:
-            print("  (No boxscore player stats published yet — try again later.)\n")
-            continue
+            game_label = f"{away.get('abbr','')}@{home.get('abbr','')}"
+            print(f"{game_label} — {status_line} — (event {event_id})")
 
-        for p in players:
-            key = norm_name(p["player"])
-            info = draft_map.get(key)
-            if info:
-                owner = info["owner"]
-                started_today = "Yes" if info["started"] else "No"
-            else:
-                owner = "Undrafted"
-                started_today = "No"
+            players = get_boxscore_players(event_id)
+            if not players:
+                print("  (No boxscore player stats published yet — try again later.)\n")
+                continue
 
-            all_rows.append({
-                "date": yyyy_mm_dd,
-                "game": game_label,
-                "status": status_line,
-                "owner": owner,
-                "started_today": started_today,
-                "team": p["team"],
-                "player": p["player"],
-                "pooh": p["pooh"],
-                "pts": p["pts"],
-                "reb": p["reb"],
-                "ast": p["ast"],
-                "stl": p["stl"],
-                "blk": p["blk"],
-                "to":  p["to"],
-                "min": p["min"],
-            })
+            for p in players:
+                key = norm_name(p["player"])
+                info = draft_map.get(key)
+                if info:
+                    owner = info["owner"]
+                    started_today = "Yes" if info["started"] else "No"
+                else:
+                    owner = "Undrafted"
+                    started_today = "No"
 
-        print(f"  Players captured: {len(players)}\n")
+                all_rows.append({
+                    "date": day_label,
+                    "game": game_label,
+                    "status": status_line,
+                    "owner": owner,
+                    "started_today": started_today,
+                    "team": p["team"],
+                    "player": p["player"],
+                    "pooh": p["pooh"],
+                    "pts": p["pts"],
+                    "reb": p["reb"],
+                    "ast": p["ast"],
+                    "stl": p["stl"],
+                    "blk": p["blk"],
+                    "to":  p["to"],
+                    "min": p["min"],
+                })
 
+            print(f"  Players captured: {len(players)}\n")
+
+    # Process previous day first, then primary day (keeps timeline order)
+    if sec_events_prev:
+        print(f"--- {prev_label} ---")
+        process_day(prev_label, sec_events_prev)
+
+    if sec_events_primary:
+        print(f"--- {primary_label} ---")
+        process_day(primary_label, sec_events_primary)
+
+    # Sort players: Owner (draft order), then starters first, then Pooh desc
     owner_rank = {o: i for i, o in enumerate(owner_order)}
 
     def sort_key(r):
         o = r["owner"]
         oidx = owner_rank.get(o, 10_000 if o == "Undrafted" else 9_000)
         starter_rank = 0 if r["started_today"] == "Yes" else 1
-        return (oidx, o, starter_rank, -r["pooh"], r["player"])
+        # include date so prev day comes first if owners/pooh tie
+        return (oidx, o, r.get("date",""), starter_rank, -int(r.get("pooh", 0)), r.get("player",""))
 
     all_rows.sort(key=sort_key)
 
+    # OwnerTotals: EXCLUDE Undrafted; totals combined across BOTH days
     totals: Dict[str, Dict[str, int]] = {}
     for r in all_rows:
         owner = r["owner"]
@@ -499,7 +546,7 @@ def main():
     owner_totals_rows.sort(key=lambda x: x["starter_pooh_total"], reverse=True)
 
     write_xlsx(all_rows, owner_totals_rows, out_xlsx)
-    write_html_tables(all_rows, owner_totals_rows, out_players_html, out_owners_html, yyyy_mm_dd)
+    write_html_tables(all_rows, owner_totals_rows, out_players_html, out_owners_html, title_str)
 
     print(f"Wrote: {out_players_html}")
     print(f"Wrote: {out_owners_html}")
@@ -508,4 +555,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
