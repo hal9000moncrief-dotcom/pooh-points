@@ -1,10 +1,19 @@
-name: Run Pooh Points  
+name: Run Pooh Points
 
 on:
-  workflow_dispatch: {}
-  # Optional later if you want automatic runs:
-  # schedule:
-  #   - cron: "*/10 18-04 * * *"
+  workflow_dispatch:
+    inputs:
+      date_yyyymmdd:
+        description: "Game date (YYYYMMDD). Leave blank for today."
+        required: false
+        default: ""
+  schedule:
+    # Tue/Wed evenings CT (covers both CST/CDT in UTC; exact window enforced by the gate)
+    - cron: "*/5 22-23 * * 2,3"
+    - cron: "*/5 0-6 * * 3,4"
+    # Sat/Sun daytime+evening CT (covers both CST/CDT in UTC; exact window enforced by the gate)
+    - cron: "*/5 16-23 * * 6,0"
+    - cron: "*/5 0-6 * * 0,1"
 
 permissions:
   contents: write
@@ -16,23 +25,94 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Window check (America/Chicago)
+        id: window_check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Manual runs should always proceed (date optional)
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run: allowed."
+            exit 0
+          fi
+
+          # Scheduled runs: enforce exact CT windows
+          DAY="$(TZ=America/Chicago date +%u)"   # 1=Mon ... 7=Sun
+          HM="$(TZ=America/Chicago date +%H%M)"  # HHMM
+
+          should_run="false"
+
+          # Tue (2) or Wed (3): 17:00–23:30 CT
+          if [[ "$DAY" == "2" || "$DAY" == "3" ]]; then
+            if [[ "$HM" -ge 1700 && "$HM" -le 2330 ]]; then
+              should_run="true"
+            fi
+          fi
+
+          # Sat (6) or Sun (7): 11:00–23:30 CT
+          if [[ "$DAY" == "6" || "$DAY" == "7" ]]; then
+            if [[ "$HM" -ge 1100 && "$HM" -le 2330 ]]; then
+              should_run="true"
+            fi
+          fi
+
+          echo "CT day=$DAY time=$HM -> should_run=$should_run"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml openpyxl
 
       - name: Run script (writes outputs into site/)
+        if: github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true'
+        id: run_pooh
+        shell: bash
         run: |
-          python app/python_today_pooh.py
+          set -euo pipefail
 
-      - name: Commit updated site files
+          DATE_INPUT="$(echo "${{ inputs.date_yyyymmdd }}" | tr -d '[:space:]')"
+
+          if [[ -n "${DATE_INPUT}" ]]; then
+            echo "Running for date: ${DATE_INPUT}"
+            python -u app/python_today_pooh.py "${DATE_INPUT}" | tee pooh_run.log
+          else
+            echo "Running for today"
+            python -u app/python_today_pooh.py | tee pooh_run.log
+          fi
+
+          # Parse: "Found X SEC-involved games for YYYY-MM-DD"
+          SEC_GAMES="$(grep -Eo 'Found [0-9]+ SEC-involved games' pooh_run.log | head -n 1 | awk '{print $2}' || true)"
+          if [[ -z "${SEC_GAMES}" ]]; then
+            SEC_GAMES="0"
+          fi
+
+          echo "sec_games=${SEC_GAMES}" >> "$GITHUB_OUTPUT"
+          echo "SEC games found: ${SEC_GAMES}"
+
+      - name: Commit updated site files (only if SEC games exist)
+        if: (github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true') && steps.run_pooh.outputs.sec_games != '0'
+        shell: bash
         run: |
+          set -euo pipefail
+
+          if [[ -z "$(git status --porcelain site/)" ]]; then
+            echo "No changes in site/. Nothing to commit."
+            exit 0
+          fi
+
           git config user.name "pooh-bot"
           git config user.email "pooh-bot@users.noreply.github.com"
           git add site/*.html site/*.xlsx || true
