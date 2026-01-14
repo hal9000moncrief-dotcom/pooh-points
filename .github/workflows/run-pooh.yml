@@ -7,8 +7,8 @@ on:
         description: "Game date (YYYYMMDD). Leave blank for today."
         required: false
         default: ""
-schedule:
-  - cron: "*/5 * * * *"
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: write
@@ -29,14 +29,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Manual runs should always proceed (date optional)
+          # Manual runs should always proceed
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "Manual run: allowed."
             exit 0
           fi
 
-          # Scheduled runs: enforce exact CT windows
+          # Scheduled runs: enforce CT windows
           DAY="$(TZ=America/Chicago date +%u)"   # 1=Mon ... 7=Sun
           HM="$(TZ=America/Chicago date +%H%M)"  # HHMM
 
@@ -71,7 +71,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml openpyxl
 
-      - name: Run script (writes outputs into site/)
+      - name: Run script
         if: github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true'
         id: run_pooh
         shell: bash
@@ -88,7 +88,7 @@ jobs:
             python -u app/python_today_pooh.py | tee pooh_run.log
           fi
 
-          # Parse: "Found X SEC-involved games for YYYY-MM-DD"
+          # Extract SEC game count
           SEC_GAMES="$(grep -Eo 'Found [0-9]+ SEC-involved games' pooh_run.log | head -n 1 | awk '{print $2}' || true)"
           if [[ -z "${SEC_GAMES}" ]]; then
             SEC_GAMES="0"
@@ -104,7 +104,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$(git status --porcelain docs/)" ]]; then
-            echo "No changes in site/. Nothing to commit."
+            echo "No changes in docs/. Nothing to commit."
             exit 0
           fi
 
