@@ -2,15 +2,17 @@ name: Schedule Smoke Test
 
 on:
   schedule:
-    - cron: "* * * * *"
-  workflow_dispatch: {}
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  smoke:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Print when this ran
+      - name: Show trigger
         run: |
-          echo "event=${{ github.event_name }}"
-          echo "utc=$(date -u)"
-          echo "ct=$(TZ=America/Chicago date)"
+          echo "event=${GITHUB_EVENT_NAME}"
+          date
