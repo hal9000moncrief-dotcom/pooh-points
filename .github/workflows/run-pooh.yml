@@ -8,11 +8,15 @@ on:
         required: false
         default: ""
   schedule:
-    # Run every 5 minutes; window_check below restricts to CT windows
+    # Run every 5 minutes (GitHub schedules are UTC and best-effort; we enforce CT windows below)
     - cron: "*/5 * * * *"
 
 permissions:
   contents: write
+
+concurrency:
+  group: pooh-points
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -98,24 +102,20 @@ jobs:
           echo "sec_games=${SEC_GAMES}" >> "$GITHUB_OUTPUT"
           echo "SEC games found: ${SEC_GAMES}"
 
-      - name: Commit updated docs files (only if SEC games exist AND files changed)
+      - name: Commit updated docs files (only if SEC games exist)
         if: (github.event_name == 'workflow_dispatch' || steps.window_check.outputs.should_run == 'true') && steps.run_pooh.outputs.sec_games != '0'
         shell: bash
         run: |
           set -euo pipefail
 
-          git config user.name "pooh-bot"
-          git config user.email "pooh-bot@users.noreply.github.com"
-
-          # Stage as "intent to add" so git diff can detect changes even if files are new
-          git add -N docs/*.html docs/*.xlsx || true
-
-          # If nothing in docs/ actually changed, do NOT commit (prevents Pages deploy spam)
-          if git diff --quiet -- docs/; then
+          # Only commit if docs/ actually changed
+          if [[ -z "$(git status --porcelain docs/)" ]]; then
             echo "No changes in docs/. Nothing to commit."
             exit 0
           fi
 
+          git config user.name "pooh-bot"
+          git config user.email "pooh-bot@users.noreply.github.com"
           git add docs/*.html docs/*.xlsx || true
-          git commit -m "Update Pooh Points site"
+          git commit -m "Update Pooh Points site" || echo "No changes to commit"
           git push
