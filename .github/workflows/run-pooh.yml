@@ -7,13 +7,8 @@ on:
         description: "Game date (YYYYMMDD). Leave blank for today."
         required: false
         default: ""
-  schedule:
-    # Tue/Wed evenings CT (covers both CST/CDT in UTC; exact window enforced by the gate)
-    - cron: "*/5 22-23 * * 2,3"
-    - cron: "*/5 0-6 * * 3,4"
-    # Sat/Sun daytime+evening CT (covers both CST/CDT in UTC; exact window enforced by the gate)
-    - cron: "*/5 16-23 * * 6,0"
-    - cron: "*/5 0-6 * * 0,1"
+schedule:
+  - cron: "*/5 * * * *"
 
 permissions:
   contents: write
