@@ -86,6 +86,7 @@ jobs:
 
           python - << 'PY'
           import re
+          from datetime import datetime, date, timedelta
           from openpyxl import load_workbook
 
           yyyymmdd = "${{ steps.params.outputs.date_yyyymmdd }}".strip()
@@ -93,41 +94,84 @@ jobs:
           if not re.fullmatch(r"\d{8}", yyyymmdd):
             raise SystemExit(f"ERROR: date must be YYYYMMDD (8 digits). Got: {yyyymmdd}")
 
-          # Convert YYYYMMDD -> MMDDYYYY to match your PD.xlsx
+          # Convert YYYYMMDD -> MMDDYYYY to match your PD.xlsx display intent
           yyyy = yyyymmdd[0:4]
           mm   = yyyymmdd[4:6]
           dd   = yyyymmdd[6:8]
-          mmddyyyy = f"{mm}{dd}{yyyy}"
+          target_mmddyyyy = f"{mm}{dd}{yyyy}"
 
           wb = load_workbook("app/PD.xlsx", data_only=True)
           ws = wb.active
 
-          # Your sheet is 2 columns, no headers:
-          # Col A = MMDDYYYY, Col B = play date number (1..19)
+          def norm_to_mmddyyyy(v):
+            """Normalize Excel cell value to MMDDYYYY (8 digits) if possible."""
+            if v is None:
+              return None
+
+            # If Excel stored it as a date
+            if isinstance(v, datetime):
+              return v.strftime("%m%d%Y")
+            if isinstance(v, date):
+              return v.strftime("%m%d%Y")
+
+            # If Excel stored it as a number (could be 01242026 shown but 1242026 stored)
+            if isinstance(v, (int, float)):
+              iv = int(v)
+
+              # Might be an Excel serial date (roughly 40k-70k for modern dates)
+              if 30000 <= iv <= 80000:
+                d = date(1899, 12, 30) + timedelta(days=iv)
+                return d.strftime("%m%d%Y")
+
+              # Otherwise treat as digits and pad to 8
+              s = str(iv)
+              if len(s) <= 8:
+                return s.zfill(8)
+              return None
+
+            # Strings: allow 01032026, 01032026.0, 01/24/2026, 2026-01-24, etc.
+            s = str(v).strip()
+
+            m = re.match(r"^(\d{8})(?:\.0)?$", s)
+            if m:
+              return m.group(1)
+
+            m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+            if m:
+              mo, da, yr = m.groups()
+              return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
+
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+            if m:
+              yr, mo, da = m.groups()
+              return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
+
+            m = re.match(r"^(\d{6,8})(?:\.0)?$", s)
+            if m:
+              return m.group(1).zfill(8)
+
+            return None
+
           found = None
           for row in ws.iter_rows(values_only=True):
             if not row or row[0] is None:
               continue
-            left = str(row[0]).strip()
-            m = re.match(r"^(\d{8})(?:\.0)?$", left)
-            if m:
-              left = m.group(1)
-
-            if left == mmddyyyy:
+            left = norm_to_mmddyyyy(row[0])
+            if left == target_mmddyyyy:
               found = row[1]
               break
 
           if found is None:
             raise SystemExit(
-              f"ERROR: Date {yyyymmdd} (MMDDYYYY={mmddyyyy}) does not correspond to a Play Date in app/PD.xlsx. Aborting Final Run."
+              f"ERROR: Date {yyyymmdd} (MMDDYYYY={target_mmddyyyy}) does not correspond to a Play Date in app/PD.xlsx. Aborting Final Run."
             )
 
           pdnum = str(found).strip().replace(".0", "")
           if not pdnum.isdigit():
-            raise SystemExit(f"ERROR: PD value for {mmddyyyy} is not numeric: {found}")
+            raise SystemExit(f"ERROR: PD value for {target_mmddyyyy} is not numeric: {found}")
 
           pd = f"PD{int(pdnum)}"
-          print(f"Resolved date {yyyymmdd} -> {mmddyyyy} -> {pd}")
+          print(f"Resolved date {yyyymmdd} -> {target_mmddyyyy} -> {pd}")
 
           with open("pd_resolved.txt", "w", encoding="utf-8") as f:
             f.write(pd)
