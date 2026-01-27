@@ -209,6 +209,13 @@ jobs:
           echo "Created:"
           echo "  docs/Final_Players_${PD}.html"
           echo "  docs/Final_Owners_${PD}.html"
+          
+      - name: Build Summary of Results to Date (Final runs only)
+        if: ${{ steps.params.outputs.run_mode == 'final' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -u app/build_summary_to_date.py
 
       - name: Commit site updates if changed
         shell: bash
