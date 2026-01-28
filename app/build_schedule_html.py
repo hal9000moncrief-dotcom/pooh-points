@@ -11,27 +11,144 @@ XLSX_PATH = os.path.join(DOCS_DIR, "Schedule 2026.xlsx")
 OUT_HTML = os.path.join(DOCS_DIR, "Schedule.html")
 
 
-def _rgb_from_color(c: Color):
+# ----------------------------
+# Theme color support helpers
+# ----------------------------
+def _hex_to_rgb(hex6: str):
+    hex6 = hex6.strip().lstrip("#")
+    return int(hex6[0:2], 16), int(hex6[2:4], 16), int(hex6[4:6], 16)
+
+def _rgb_to_hex(r: int, g: int, b: int):
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+def _apply_tint_to_rgb(r: int, g: int, b: int, tint: float):
     """
-    Return CSS hex color like #RRGGBB or None.
-    Handles ARGB (e.g. 'FF112233') and rgb (e.g. '112233').
-    Ignores theme/indexed unless explicitly rgb is present.
+    Excel tint:
+      - tint < 0 => darken
+      - tint > 0 => lighten
+    This approximates the Excel behavior.
+    """
+    tint = float(tint)
+    def adj(c):
+        if tint < 0:
+            return int(round(c * (1.0 + tint)))
+        else:
+            return int(round(c + (255 - c) * tint))
+    r2, g2, b2 = adj(r), adj(g), adj(b)
+    r2 = max(0, min(255, r2))
+    g2 = max(0, min(255, g2))
+    b2 = max(0, min(255, b2))
+    return r2, g2, b2
+
+def _get_theme_palette_hex(wb) -> list:
+    """
+    Returns a list of up to 12 theme colors as hex strings 'RRGGBB'.
+    If we can't parse the theme, we return a reasonable Office default palette.
+    """
+    # Office default (approx), indices 0..11
+    fallback = [
+        "FFFFFF",  # lt1
+        "000000",  # dk1
+        "EEECE1",  # lt2
+        "1F497D",  # dk2
+        "4F81BD",  # accent1
+        "C0504D",  # accent2 (reddish)
+        "9BBB59",  # accent3
+        "8064A2",  # accent4
+        "4BACC6",  # accent5
+        "F79646",  # accent6
+        "0000FF",  # hlink
+        "800080",  # folHlink
+    ]
+
+    try:
+        theme = wb.theme
+        if theme is None:
+            return fallback
+
+        # openpyxl theme structure can vary; attempt to pull out clrScheme
+        cs = theme.themeElements.clrScheme
+
+        # Order should be: lt1, dk1, lt2, dk2, accent1..6, hlink, folHlink
+        names = ["lt1","dk1","lt2","dk2","accent1","accent2","accent3","accent4","accent5","accent6","hlink","folHlink"]
+        out = []
+
+        for nm in names:
+            cobj = getattr(cs, nm, None)
+            if cobj is None:
+                out.append(fallback[len(out)])
+                continue
+
+            # Theme colors often stored as srgbClr or sysClr
+            val = None
+            if getattr(cobj, "srgbClr", None) is not None:
+                val = getattr(cobj.srgbClr, "val", None)
+            if val is None and getattr(cobj, "sysClr", None) is not None:
+                # sysClr has lastClr sometimes
+                val = getattr(cobj.sysClr, "lastClr", None) or getattr(cobj.sysClr, "val", None)
+
+            if not val:
+                out.append(fallback[len(out)])
+            else:
+                # val already hex without '#'
+                v = str(val).strip().lstrip("#")
+                if len(v) == 6:
+                    out.append(v.upper())
+                else:
+                    out.append(fallback[len(out)])
+
+        return out
+    except Exception:
+        return fallback
+
+
+def _css_color_from_openpyxl_color(c: Color, theme_palette_hex: list):
+    """
+    Convert openpyxl Color to CSS #RRGGBB.
+    Supports:
+      - rgb / ARGB
+      - theme + tint
     """
     if c is None:
         return None
+
+    # 1) Direct RGB (best case)
     rgb = getattr(c, "rgb", None)
-    if not rgb:
+    if rgb:
+        rgb = str(rgb).strip()
+        # ARGB -> drop alpha
+        if len(rgb) == 8:
+            rgb = rgb[2:]
+        if len(rgb) == 6:
+            return f"#{rgb.upper()}"
         return None
-    rgb = str(rgb).strip()
-    # ARGB -> drop alpha
-    if len(rgb) == 8:
-        rgb = rgb[2:]
-    if len(rgb) != 6:
-        return None
-    return f"#{rgb}"
+
+    # 2) Theme color
+    theme_idx = getattr(c, "theme", None)
+    if theme_idx is not None:
+        try:
+            idx = int(theme_idx)
+        except Exception:
+            return None
+
+        if 0 <= idx < len(theme_palette_hex):
+            base_hex = theme_palette_hex[idx]
+        else:
+            return None
+
+        r, g, b = _hex_to_rgb(base_hex)
+        tint = getattr(c, "tint", None)
+        if tint is not None:
+            r, g, b = _apply_tint_to_rgb(r, g, b, float(tint))
+        return _rgb_to_hex(r, g, b)
+
+    return None
 
 
-def _cell_style_to_css(cell):
+# ----------------------------
+# Excel -> HTML styling
+# ----------------------------
+def _cell_style_to_css(cell, theme_palette_hex):
     styles = []
 
     # Font
@@ -44,7 +161,7 @@ def _cell_style_to_css(cell):
         if f.underline:
             styles.append("text-decoration:underline")
         if f.color is not None:
-            col = _rgb_from_color(f.color)
+            col = _css_color_from_openpyxl_color(f.color, theme_palette_hex)
             if col:
                 styles.append(f"color:{col}")
 
@@ -52,7 +169,7 @@ def _cell_style_to_css(cell):
     fill = cell.fill
     if fill is not None and getattr(fill, "patternType", None) == "solid":
         fg = getattr(fill, "fgColor", None)
-        col = _rgb_from_color(fg)
+        col = _css_color_from_openpyxl_color(fg, theme_palette_hex)
         if col:
             styles.append(f"background:{col}")
 
@@ -72,7 +189,6 @@ def _cell_style_to_css(cell):
 def _escape_cell_value(v):
     if v is None:
         return "&nbsp;"
-    # preserve newlines
     s = str(v)
     s = html.escape(s)
     s = s.replace("\n", "<br>")
@@ -88,13 +204,14 @@ def main():
     wb = load_workbook(XLSX_PATH, data_only=True)
     ws = wb.active
 
-    # Determine the used range robustly
+    theme_palette_hex = _get_theme_palette_hex(wb)
+
     max_row = ws.max_row or 1
     max_col = ws.max_column or 1
 
-    # Build merged-cell maps: top-left -> (rowspan, colspan)
-    merged_top_left = {}  # (r,c) -> (rs, cs)
-    merged_covered = set()  # cells inside merges that are not top-left
+    # merged-cell maps: top-left -> (rowspan, colspan), covered cells skipped
+    merged_top_left = {}
+    merged_covered = set()
     for m in ws.merged_cells.ranges:
         min_row = m.min_row
         min_col = m.min_col
@@ -116,10 +233,10 @@ def main():
         f.write(
             "<style>"
             "body{font-family:Calibri,Arial;background:#ffffff}"
-            ".wrap{width:1200px;margin:20px auto;border:3px solid #000;background:#FFFFCC;padding:12px}"
+            ".wrap{width:1400px;margin:20px auto;border:3px solid #000;background:#FFFFCC;padding:12px}"
             "h1{margin:0 0 10px 0;text-align:center;background:#C0C0C0;border:1px solid #000;padding:10px}"
             "table{border-collapse:collapse;width:100%;background:#ffffff}"
-            "td,th{border:1px solid #000;padding:6px 8px;font-size:12pt}"
+            "td,th{border:1px solid #000;padding:6px 8px;font-size:12pt;white-space:nowrap}"
             "</style>"
         )
         f.write("</head><body><div class='wrap'>")
@@ -134,8 +251,8 @@ def main():
                     continue
 
                 cell = ws.cell(row=r, column=c)
+                tag = "th" if r <= 2 else "td"  # 2 header rows
 
-                tag = "th" if r <= 2 else "td"  # your first 2 rows are header rows
                 attrs = []
                 if (r, c) in merged_top_left:
                     rs, cs = merged_top_left[(r, c)]
@@ -144,12 +261,11 @@ def main():
                     if cs > 1:
                         attrs.append(f"colspan='{cs}'")
 
-                css = _cell_style_to_css(cell)
+                css = _cell_style_to_css(cell, theme_palette_hex)
                 if css:
                     attrs.append(f"style='{css}'")
 
                 val = _escape_cell_value(cell.value)
-
                 f.write(f"<{tag} {' '.join(attrs)}>{val}</{tag}>")
 
             f.write("</tr>")
