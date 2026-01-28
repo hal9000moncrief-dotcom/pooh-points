@@ -216,6 +216,12 @@ jobs:
         run: |
           set -euo pipefail
           python -u app/build_summary_to_date.py
+          
+      - name: Build Schedule page (HTML)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -u app/build_schedule_html.py
 
       - name: Commit site updates if changed
         shell: bash
