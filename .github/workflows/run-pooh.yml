@@ -108,7 +108,7 @@ jobs:
           echo "Resolved -> $PD"
           echo "$PD" > pd_resolved.txt
 
-      - name: Run Pooh Points script
+      - name: Run Pooh Points script (writes docs/today_*.html)
         shell: bash
         env:
           RUN_MODE: ${{ steps.params.outputs.run_mode }}
@@ -117,6 +117,13 @@ jobs:
           DATE_LOCAL="${{ steps.params.outputs.date_yyyymmdd }}"
           echo "Running script for date $DATE_LOCAL (RUN_MODE=$RUN_MODE)"
           python -u app/python_today_pooh.py "$DATE_LOCAL"
+
+      - name: Debug: show changes to today_* after run
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la docs/today_players.html docs/today_owners.html
+          git status --porcelain docs/today_players.html docs/today_owners.html || true
 
       # Guardrail: ensure no earlier step touched Final files (prevents accidental overwrites)
       - name: "Guard: Final_* must not change before snapshot"
@@ -168,6 +175,17 @@ jobs:
           set -euo pipefail
           python -u app/build_schedule_html.py
 
+      # KEY FIX:
+      # Explicitly stage today_* during FINAL runs so they always get committed alongside Final_*.
+      - name: Ensure today_* are staged (Final runs only)
+        if: ${{ steps.params.outputs.run_mode == 'final' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs/today_players.html
+          test -f docs/today_owners.html
+          git add docs/today_players.html docs/today_owners.html
+
       - name: Commit site updates if changed
         shell: bash
         env:
@@ -176,6 +194,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Stage everything under docs/ (includes today_* + Final_* + summaries + schedule)
+          git add docs/
+
           if [[ -z "$(git status --porcelain docs/)" ]]; then
             echo "No changes to commit."
             exit 0
@@ -183,7 +204,6 @@ jobs:
 
           git config user.name "pooh-bot"
           git config user.email "pooh-bot@users.noreply.github.com"
-          git add docs/
 
           MSG="Pooh Points: ${RUN_MODE} ${RUN_DATE}"
           if [[ -f pd_resolved.txt ]]; then
