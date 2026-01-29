@@ -147,9 +147,9 @@ def main():
         for owner in owners_sorted:
             total = owner_total.get(owner, 0)
 
-            out1 = top1 - total
-            out2 = top2 - total
-            out3 = top3 - total
+            out1 = max(0, top1 - total)
+            out2 = max(0, top2 - total)
+            out3 = max(0, top3 - total)
 
             out.write("<tr>")
             out.write(f"<td>{owner}</td>")
