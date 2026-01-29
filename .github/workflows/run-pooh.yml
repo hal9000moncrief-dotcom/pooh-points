@@ -23,7 +23,6 @@ on:
 permissions:
   contents: write
 
-# Prevent scheduled/manual runs (or two manual runs) from stomping on each other
 concurrency:
   group: pooh-points
   cancel-in-progress: true
@@ -37,6 +36,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -103,7 +104,7 @@ jobs:
             exit 1
           fi
 
-          python - << 'PY'
+          python - <<'PY'
           import re
           from datetime import datetime, date, timedelta
           from openpyxl import load_workbook
@@ -111,7 +112,7 @@ jobs:
           yyyymmdd = "${{ steps.params.outputs.date_yyyymmdd }}".strip()
 
           if not re.fullmatch(r"\d{8}", yyyymmdd):
-            raise SystemExit(f"ERROR: date must be YYYYMMDD (8 digits). Got: {yyyymmdd}")
+              raise SystemExit(f"ERROR: date must be YYYYMMDD (8 digits). Got: {yyyymmdd}")
 
           yyyy = yyyymmdd[0:4]
           mm   = yyyymmdd[4:6]
@@ -122,62 +123,63 @@ jobs:
           ws = wb.active
 
           def norm_to_mmddyyyy(v):
-            if v is None:
+              if v is None:
+                  return None
+              if isinstance(v, datetime):
+                  return v.strftime("%m%d%Y")
+              if isinstance(v, date):
+                  return v.strftime("%m%d%Y")
+              if isinstance(v, (int, float)):
+                  iv = int(v)
+                  if 30000 <= iv <= 80000:
+                      d = date(1899, 12, 30) + timedelta(days=iv)
+                      return d.strftime("%m%d%Y")
+                  s = str(iv)
+                  return s.zfill(8) if len(s) <= 8 else None
+
+              s = str(v).strip()
+
+              m = re.match(r"^(\d{8})(?:\.0)?$", s)
+              if m:
+                  return m.group(1)
+
+              m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+              if m:
+                  mo, da, yr = m.groups()
+                  return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
+
+              m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+              if m:
+                  yr, mo, da = m.groups()
+                  return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
+
+              m = re.match(r"^(\d{6,8})(?:\.0)?$", s)
+              if m:
+                  return m.group(1).zfill(8)
+
               return None
-            if isinstance(v, datetime):
-              return v.strftime("%m%d%Y")
-            if isinstance(v, date):
-              return v.strftime("%m%d%Y")
-            if isinstance(v, (int, float)):
-              iv = int(v)
-              if 30000 <= iv <= 80000:
-                d = date(1899, 12, 30) + timedelta(days=iv)
-                return d.strftime("%m%d%Y")
-              s = str(iv)
-              return s.zfill(8) if len(s) <= 8 else None
-
-            s = str(v).strip()
-            m = re.match(r"^(\d{8})(?:\.0)?$", s)
-            if m: return m.group(1)
-
-            m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
-            if m:
-              mo, da, yr = m.groups()
-              return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
-
-            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
-            if m:
-              yr, mo, da = m.groups()
-              return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"
-
-            m = re.match(r"^(\d{6,8})(?:\.0)?$", s)
-            if m: return m.group(1).zfill(8)
-
-            return None
 
           found = None
           for row in ws.iter_rows(values_only=True):
-            if not row or row[0] is None:
-              continue
-            left = norm_to_mmddyyyy(row[0])
-            if left == target_mmddyyyy:
-              found = row[1]
-              break
+              if not row or row[0] is None:
+                  continue
+              left = norm_to_mmddyyyy(row[0])
+              if left == target_mmddyyyy:
+                  found = row[1]
+                  break
 
           if found is None:
-            raise SystemExit(
-              f"ERROR: Date {yyyymmdd} (MMDDYYYY={target_mmddyyyy}) does not correspond to a Play Date in app/PD.xlsx."
-            )
+              raise SystemExit(f"ERROR: Date {yyyymmdd} (MMDDYYYY={target_mmddyyyy}) is not in app/PD.xlsx.")
 
           pdnum = str(found).strip().replace(".0", "")
           if not pdnum.isdigit():
-            raise SystemExit(f"ERROR: PD value for {target_mmddyyyy} is not numeric: {found}")
+              raise SystemExit(f"ERROR: PD value for {target_mmddyyyy} is not numeric: {found}")
 
           pd = f"PD{int(pdnum)}"
           print(f"Resolved date {yyyymmdd} -> {target_mmddyyyy} -> {pd}")
 
           with open("pd_resolved.txt", "w", encoding="utf-8") as f:
-            f.write(pd)
+              f.write(pd)
           PY
 
       - name: Run Pooh Points script
@@ -208,7 +210,6 @@ jobs:
           set -euo pipefail
           python -u app/build_schedule_html.py
 
-      # Guardrail: if any build step accidentally modified Final_* files, fail before we copy
       - name: Guard: Final_* must not change before snapshot
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
@@ -220,24 +221,16 @@ jobs:
             exit 1
           fi
 
-      # IMPORTANT: Snapshot copy must be LAST so later steps can't overwrite finals
       - name: If Final Run, create Final_* copies for that PD (LAST)
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
         run: |
           set -euo pipefail
-
           PD="$(cat pd_resolved.txt)"
           echo "Creating Final_* copies for $PD from today_*.html (snapshot written last)"
 
-          if [[ ! -f "docs/today_players.html" ]]; then
-            echo "ERROR: Missing docs/today_players.html"
-            exit 1
-          fi
-          if [[ ! -f "docs/today_owners.html" ]]; then
-            echo "ERROR: Missing docs/today_owners.html"
-            exit 1
-          fi
+          test -f "docs/today_players.html"
+          test -f "docs/today_owners.html"
 
           cp -f "docs/today_players.html" "docs/Final_Players_${PD}.html"
           cp -f "docs/today_owners.html"  "docs/Final_Owners_${PD}.html"
@@ -260,13 +253,11 @@ jobs:
           git config user.email "pooh-bot@users.noreply.github.com"
           git add docs/
 
-          # Make commits self-identifying (mode/date/PD) to make debugging easy
           MSG="Pooh Points: ${{ steps.params.outputs.run_mode }} ${{ steps.params.outputs.date_yyyymmdd }}"
           if [[ -f pd_resolved.txt ]]; then
             MSG="$MSG -> $(cat pd_resolved.txt)"
           fi
           git commit -m "$MSG"
 
-          # Be robust if another run pushed recently
-          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git pull --rebase origin main
           git push
