@@ -156,6 +156,7 @@ def parse_yyyymmdd(s: str) -> datetime:
     if not re.fullmatch(r"\d{8}", s):
         raise ValueError("Date must be YYYYMMDD (8 digits).")
     dt = datetime.strptime(s, "%Y%m%d")
+    # Interpret as local date at midnight in America/Chicago
     return dt.replace(tzinfo=LOCAL_TZ)
 
 def fmt_yyyymmdd(dt: datetime) -> str:
@@ -241,7 +242,7 @@ def get_sec_events(date_yyyymmdd: str) -> List[dict]:
     data = get_json(url)
     events = data.get("events", []) or []
 
-    # HARD FILTER: only keep events whose actual local date matches the requested date.
+    # STRICT FILTER: only keep events whose actual local date matches the requested date.
     filtered = [e for e in events if event_local_yyyymmdd(e) == date_yyyymmdd]
 
     if len(filtered) != len(events):
@@ -446,14 +447,14 @@ def main():
     primary_label = fmt_yyyy_mm_dd(primary_dt)
     prev_label = fmt_yyyy_mm_dd(prev_dt)
 
-    # Title: normal shows range; final shows only that day (no PD-1 bleed)
+    # Title: always show range; add FINAL marker when applicable
+    title_str = f"{prev_label} + {primary_label}"
     if is_final:
-        title_str = f"{primary_label} (FINAL snapshot)"
-    else:
-        title_str = f"{prev_label} + {primary_label}"
+        title_str += " (FINAL snapshot)"
 
     print(f"RUN_MODE={run_mode}  is_final={is_final}")
     print(f"Local now (America/Chicago): {datetime.now(LOCAL_TZ).isoformat()}")
+    print(f"Querying SEC scoreboard dates: {prev_yyyymmdd} and {primary_yyyymmdd}")
 
     draft_map, owner_order = load_draft_board(DRAFT_XLSX)
 
@@ -517,11 +518,8 @@ def main():
 
             print(f"  Players captured: {len(players)}\n")
 
-    # NORMAL: include previous day + primary day
-    # FINAL: include ONLY the primary day (no PD-1 bleed)
-    if not is_final:
-        process_day(prev_label, prev_yyyymmdd)
-
+    # ALWAYS include previous day + primary day (this is your PD definition)
+    process_day(prev_label, prev_yyyymmdd)
     process_day(primary_label, primary_yyyymmdd)
 
     # Sort players: Owner (draft order), then starters first, then Pooh desc
