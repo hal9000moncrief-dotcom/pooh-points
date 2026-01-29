@@ -118,7 +118,7 @@ jobs:
           echo "Running script for date $DATE_LOCAL (RUN_MODE=$RUN_MODE)"
           python -u app/python_today_pooh.py "$DATE_LOCAL"
 
-      - name: Debug: show changes to today_* after run
+      - name: "Debug: show changes to today_* after run"
         shell: bash
         run: |
           set -euo pipefail
@@ -175,8 +175,7 @@ jobs:
           set -euo pipefail
           python -u app/build_schedule_html.py
 
-      # KEY FIX:
-      # Explicitly stage today_* during FINAL runs so they always get committed alongside Final_*.
+      # Ensure today_* are staged on FINAL runs so they get committed even if other steps run.
       - name: Ensure today_* are staged (Final runs only)
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
