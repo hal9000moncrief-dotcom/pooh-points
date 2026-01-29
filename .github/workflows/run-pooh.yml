@@ -17,7 +17,7 @@ on:
         default: normal
 
   schedule:
-    # Every 10 minutes (cron is UTC)
+    # Every 10 minutes (cron is UTC on GitHub runners)
     - cron: "*/10 * * * *"
 
 permissions:
@@ -26,6 +26,9 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      # Make runner commands (and any Python that respects TZ) align with you
+      TZ: America/Chicago
 
     steps:
       - name: Checkout repo
@@ -44,11 +47,22 @@ jobs:
       - name: Resolve run parameters (Central time "today")
         id: params
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RUN_MODE: ${{ github.event.inputs.run_mode }}
+          INPUT_DATE: ${{ github.event.inputs.date_yyyymmdd }}
         run: |
           set -euo pipefail
 
-          RUN_MODE="${{ github.event.inputs.run_mode || 'normal' }}"
-          DATE_INPUT="${{ github.event.inputs.date_yyyymmdd || '' }}"
+          # Defaults for scheduled runs (no inputs exist on schedule)
+          RUN_MODE="normal"
+          DATE_INPUT=""
+
+          # If this is a manual run, take the provided inputs
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            RUN_MODE="${INPUT_RUN_MODE:-normal}"
+            DATE_INPUT="${INPUT_DATE:-}"
+          fi
 
           # If no date provided, compute "today" in America/Chicago to avoid UTC rollover issues
           if [[ -z "$DATE_INPUT" ]]; then
@@ -64,6 +78,7 @@ jobs:
           echo "run_mode=$RUN_MODE" >> "$GITHUB_OUTPUT"
           echo "date_yyyymmdd=$DATE_LOCAL" >> "$GITHUB_OUTPUT"
 
+          echo "Event: $EVENT_NAME"
           echo "Run mode: $RUN_MODE"
           echo "Effective date (America/Chicago when blank): $DATE_LOCAL"
 
@@ -74,6 +89,10 @@ jobs:
           set -euo pipefail
 
           # Final Run requires an explicit typed date (not blank)
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "ERROR: Final Run is only allowed for manual workflow_dispatch."
+            exit 1
+          fi
           if [[ "${{ github.event.inputs.date_yyyymmdd || '' }}" == "" ]]; then
             echo "ERROR: Final Run requires you to type a date (YYYYMMDD)."
             exit 1
@@ -108,28 +127,24 @@ jobs:
             if v is None:
               return None
 
-            # If Excel stored it as a date
             if isinstance(v, datetime):
               return v.strftime("%m%d%Y")
             if isinstance(v, date):
               return v.strftime("%m%d%Y")
 
-            # If Excel stored it as a number (could be 01242026 shown but 1242026 stored)
             if isinstance(v, (int, float)):
               iv = int(v)
 
-              # Might be an Excel serial date (roughly 40k-70k for modern dates)
+              # Excel serial date
               if 30000 <= iv <= 80000:
                 d = date(1899, 12, 30) + timedelta(days=iv)
                 return d.strftime("%m%d%Y")
 
-              # Otherwise treat as digits and pad to 8
               s = str(iv)
               if len(s) <= 8:
                 return s.zfill(8)
               return None
 
-            # Strings: allow 01032026, 01032026.0, 01/24/2026, 2026-01-24, etc.
             s = str(v).strip()
 
             m = re.match(r"^(\d{8})(?:\.0)?$", s)
@@ -209,18 +224,21 @@ jobs:
           echo "Created:"
           echo "  docs/Final_Players_${PD}.html"
           echo "  docs/Final_Owners_${PD}.html"
-          
+
       - name: Build Summary of Results to Date (Final runs only)
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
         run: |
           set -euo pipefail
           python -u app/build_summary_to_date.py
-            
-      - name: Build Player Pooh Summary (Finals only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_type == 'final' }}
-        run: python -u app/build_player_pooh_summary.py
-    
+
+      - name: Build Player Pooh Summary (Final runs only)
+        if: ${{ steps.params.outputs.run_mode == 'final' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -u app/build_player_pooh_summary.py
+
       - name: Build Schedule page (HTML)
         shell: bash
         run: |
