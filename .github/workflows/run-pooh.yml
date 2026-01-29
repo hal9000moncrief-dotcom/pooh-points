@@ -23,6 +23,7 @@ on:
 permissions:
   contents: write
 
+# Prevent scheduled/manual runs from stomping each other
 concurrency:
   group: pooh-points
   cancel-in-progress: true
@@ -84,11 +85,11 @@ jobs:
           echo "Run mode: $RUN_MODE"
           echo "Effective date (America/Chicago when blank): $DATE_LOCAL"
 
+      # IMPORTANT:
+      # This step expects you to add app/resolve_pd.py (I provided the full file earlier).
       - name: Validate Final Run date maps to a Play Date (PDx)
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
-        env:
-          DATE_LOCAL: ${{ steps.params.outputs.date_yyyymmdd }}
         run: |
           set -euo pipefail
 
@@ -101,68 +102,13 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "app/PD.xlsx" ]]; then
-            echo "ERROR: app/PD.xlsx not found. Drop PD.xlsx into the app/ folder."
-            exit 1
-          fi
+          test -f "app/PD.xlsx"
+          test -f "app/resolve_pd.py"
 
-          python -c "$(printf '%s\n' \
-            'import re' \
-            'from datetime import datetime, date, timedelta' \
-            'from openpyxl import load_workbook' \
-            '' \
-            'yyyymmdd = "'"$DATE_LOCAL"'".strip()' \
-            'if not re.fullmatch(r"\\d{8}", yyyymmdd):' \
-            '    raise SystemExit(f"ERROR: date must be YYYYMMDD (8 digits). Got: {yyyymmdd}")' \
-            'yyyy = yyyymmdd[0:4]; mm = yyyymmdd[4:6]; dd = yyyymmdd[6:8]' \
-            'target_mmddyyyy = f"{mm}{dd}{yyyy}"' \
-            '' \
-            'wb = load_workbook("app/PD.xlsx", data_only=True)' \
-            'ws = wb.active' \
-            '' \
-            'def norm_to_mmddyyyy(v):' \
-            '    if v is None: return None' \
-            '    if isinstance(v, datetime): return v.strftime("%m%d%Y")' \
-            '    if isinstance(v, date): return v.strftime("%m%d%Y")' \
-            '    if isinstance(v, (int, float)):' \
-            '        iv = int(v)' \
-            '        if 30000 <= iv <= 80000:' \
-            '            d = date(1899, 12, 30) + timedelta(days=iv)' \
-            '            return d.strftime("%m%d%Y")' \
-            '        s = str(iv)' \
-            '        return s.zfill(8) if len(s) <= 8 else None' \
-            '    s = str(v).strip()' \
-            '    m = re.match(r"^(\\d{8})(?:\\.0)?$", s)' \
-            '    if m: return m.group(1)' \
-            '    m = re.match(r"^(\\d{1,2})/(\\d{1,2})/(\\d{4})$", s)' \
-            '    if m:' \
-            '        mo, da, yr = m.groups()' \
-            '        return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"' \
-            '    m = re.match(r"^(\\d{4})-(\\d{1,2})-(\\d{1,2})$", s)' \
-            '    if m:' \
-            '        yr, mo, da = m.groups()' \
-            '        return f"{int(mo):02d}{int(da):02d}{int(yr):04d}"' \
-            '    m = re.match(r"^(\\d{6,8})(?:\\.0)?$", s)' \
-            '    if m: return m.group(1).zfill(8)' \
-            '    return None' \
-            '' \
-            'found = None' \
-            'for row in ws.iter_rows(values_only=True):' \
-            '    if not row or row[0] is None: continue' \
-            '    left = norm_to_mmddyyyy(row[0])' \
-            '    if left == target_mmddyyyy:' \
-            '        found = row[1]' \
-            '        break' \
-            '' \
-            'if found is None:' \
-            '    raise SystemExit(f"ERROR: Date {yyyymmdd} (MMDDYYYY={target_mmddyyyy}) is not in app/PD.xlsx.")' \
-            'pdnum = str(found).strip().replace(".0","")' \
-            'if not pdnum.isdigit():' \
-            '    raise SystemExit(f"ERROR: PD value for {target_mmddyyyy} is not numeric: {found}")' \
-            'pd = f"PD{int(pdnum)}"' \
-            'print(f"Resolved date {yyyymmdd} -> {target_mmddyyyy} -> {pd}")' \
-            'open("pd_resolved.txt","w",encoding="utf-8").write(pd)' \
-          )"
+          echo "Resolving PD for date ${{ steps.params.outputs.date_yyyymmdd }} ..."
+          PD="$(python -u app/resolve_pd.py app/PD.xlsx "${{ steps.params.outputs.date_yyyymmdd }}")"
+          echo "Resolved -> $PD"
+          echo "$PD" > pd_resolved.txt
 
       - name: Run Pooh Points script
         shell: bash
@@ -192,6 +138,8 @@ jobs:
           set -euo pipefail
           python -u app/build_schedule_html.py
 
+      # Guardrail: if any build step touched Final files, stop.
+      # (This is what was corrupting PD7 with PD8 data.)
       - name: Guard: Final_* must not change before snapshot
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
@@ -203,6 +151,7 @@ jobs:
             exit 1
           fi
 
+      # Snapshot copy MUST be last so nothing can overwrite it afterwards.
       - name: If Final Run, create Final_* copies for that PD (LAST)
         if: ${{ steps.params.outputs.run_mode == 'final' }}
         shell: bash
